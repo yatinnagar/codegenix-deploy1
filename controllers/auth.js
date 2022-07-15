@@ -4,11 +4,13 @@ const jsonwebtoken=require('jsonwebtoken');
 const { errorHandler } = require("../helpers/dbErrorHandler");
 const Blog = require("../models/blog");
 const mailjet =require('../mailer/email')
+const _ = require('lodash')
+
 // const expressjwt = require("express-jwt");
 
 const { expressjwt: expressJwt } = require('express-jwt');
 
-const  {OAuth2Client}=require('google-auth-library')
+const  {OAuth2Client, JWT}=require('google-auth-library')
 
 
 exports.preSignup=(req,res)=>{
@@ -276,4 +278,102 @@ exports.canUpdateDeleteBlog=(req,res,next)=>{
         next();
 
     })
+}
+
+exports.forgotPassword=(req,res)=>{
+    const {email}=req.body;
+    User.findOne({email},(err,user)=>{
+        if(err||!user){
+            return res.status(401).json({
+                error:'User with that email does not exist.'
+            })
+        }
+        const token=jsonwebtoken.sign({_id:user._id},process.env.JWT_RESET_PASSWORD,{expiresIn:'10m'});
+        
+        //send email
+        const request = mailjet
+                    .post('send', { version: 'v3.1' })
+                    .request({
+                        Messages: [
+                        {
+                            From: {
+                            Email: process.env.EMAIL_FROM,
+                            Name: "Codegenix"
+                            },
+                            To: [
+                            {
+                                Email: email,
+                            }
+                            ],
+                            Subject: "Reset password Link",
+                            TextPart: `${process.env.APP_NAME}`,
+                            HTMLPart: `<h3>Dear user, 
+                            click the link to reset your password
+                            <a href=${process.env.CLIENT_URL+"/auth/password/reset/"+token}>click here </a>
+                            or you can paste the link given below
+                            <br/>
+                            <a href=${process.env.CLIENT_URL+"/auth/password/reset/"+token}>${process.env.CLIENT_URL+"/auth/password/reset/"+token}</a>
+                            `
+                        }
+                        ]
+                    })
+                return User.updateOne({resetPasswordLink:token},(err,success)=>{
+                    if(err){
+                        return res.json({
+                            error:errorHandler(err)
+                        })
+                    }  else {
+                        request
+                        .then((result) => {
+                        return res.json({
+                            message:`Email has been sent to reset your password ,check your inbox! , Link exipires in 10 min`
+                        })
+                        })
+                        .catch((err) => {
+                        return res.status(400).json({
+                            error:"Server error"
+                        })
+                        })
+                    }
+                })
+
+
+
+    })
+
+}
+exports.resetPassword=(req,res)=>{
+   const {resetPasswordLink,newPassword}=req.body;
+   if(resetPasswordLink){
+    jsonwebtoken.verify(resetPasswordLink,process.env.JWT_RESET_PASSWORD,function(err,decoded){
+        if(err){
+            return res.status(400).json({
+                error:'Expired Link, Try again'
+            })
+        }
+        User.findOne({resetPasswordLink},(err,user)=>{
+            if(err||!user){
+                return res.status(400).json({
+                    error:'Somthing went wrong. Try later'
+                })
+            }
+            console.log(newPassword);
+            const updatedFields={
+                hashed_password:newPassword,
+                resetPasswordLink:''
+            }
+            user=_.extend(user,updatedFields)
+            user.save((err,result)=>{
+                if(err){
+                    return res.status(400).json({
+                        error:errorHandler(err)
+                    })
+                }
+                res.json({
+                    message:'Your password has been changed successfully.'
+                })
+            })
+        })
+    })
+   }
 }
